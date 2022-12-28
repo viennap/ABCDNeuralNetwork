@@ -1,1 +1,558 @@
+import java.io.*;
+import java.util.Scanner;
+import java.nio.file.Path;
 
+/*
+ * @author     Vienna Parnell
+ * @version    11.9.2021
+ *
+ * The ABCDNetwork class models a three-layer A-B-C-D network with a configurable number of input, hidden,
+ * and output nodes.
+ *
+ * Information is propagated through the network through summations and a sigmoid activation function. This model has a
+ * single hidden layer and minimizes error by adjusting the weights using the steepest gradient descent method.
+ * Delta weight values are recalculated after each propagation of the network with adjusted weights, and the average
+ * error across all input test cases and outputs is compared to the specified error threshold. This network implements
+ * backpropagation to optimize minimization of error.
+ *
+ * A summary of the results is printed, including a comparison of the weights before and after training, as well as a
+ * table containing the inputs, expected outputs, calculated outputs, and error values for each output of the test case.
+ * The inputted parameters, including the learning factor, minimum and maximum possible random weights, and network
+ * configuration, are also displayed.
+ *
+ * The final adjusted weights are also saved to a file when network terminates training. The user is able to specify
+ * whether to use randomized weights, preloaded weights, or the more recently saved weights, and also whether to run or
+ * train the network.
+ *
+ */
+public class ABCDBackprop
+{
+   private int numInputs;                       // number of input activations
+   private int numOutputs;                      // number of output activations
+   private int numLayers;                       // number of activation layers
+   private int maxActivations;                  // maximum number of activations in a layer
+
+   private int[] numActivations;               // stores number of activations per layer
+   private double[][] activations;             // stores values of activations per layer
+   private double[][][] weights;               // stores values of weights, which are either randomized or specified
+
+   private int numInputCases;                   // number of input cases that loaded into network
+   private double[][] truthInputs;             // stores input cases that are loaded into network
+   private double[][] truthOutputs;            // stores expected outputs for each corresponding input case
+   private double[] expectedOutput;            // expected output values for current input case
+   private double error;                        // calculated discrepancy between calculated and expected output
+   private double averageError;                 // average error of input cases
+
+   private double learningFactor;               // learning factor of the network
+   private int currIterations;                  // current count of iterations
+   private int maxIterations;                   // maximum number of iterations before training is terminated
+   private double errorThreshold;               // threshold that error needs to be lower than
+   private boolean hasTrained;                  // denotes whether training should be terminated
+   private double minRand;                      // lower range limit of randomized weights
+   private double maxRand;                      // upper range limit of randomized weights
+
+   private double[] theta_i_vals;              // theta i values calculated during evaluation of network
+   private double[] theta_j_vals;              // theta j values calculated during evaluation of network
+   private double[] theta_k_vals;              // theta k values calculated during evaluation of network
+
+   private double[] psi_i_vals;                // lowercase psi i values calculated during evaluation of network
+   private double[] psi_j_vals;                // lowercase psi j values calculated during training of network
+   private double[] psi_k_vals;                // lowercase psi k values calculated during training of network
+
+   private double[] omega_j_vals;              // uppercase omega j values calculated during training of network
+   private double[] omega_k_vals;              // uppercase omega k values calculated during training of network
+
+   private int trainingTime;                    // time that network takes to train
+   private String message;
+
+   /*
+    * Constructor of ABCDNetwork object, in which the current number of iterations is set to 0, and the
+    * hasTrained variable is set to false. Also, the network, parameters, input cases, and weights are all
+    * read in through provided files and configured.
+    *
+    * @throws IOException     if input files are incorrectly formatted
+    */
+   public ABCDBackprop() throws IOException
+   {
+      currIterations = 0;
+      hasTrained = false;
+   }
+
+   /*
+    * Network is configured based on the parameters provided to the network, including the number of activations and
+    * layers. The arrays containing the calculated i, j, and k values for the corresponding theta, psi, and omega
+    * variables are initialized.
+    *
+    * @param fileName         the file name containing parameters for network configuration
+    * @throws IOException     if the input file is incorrectly formatted
+    */
+   public void configureNetwork(String fileName) throws IOException
+   {
+      Scanner sc = new Scanner(new FileReader(fileName));
+
+      String weight = sc.next();
+      String command = sc.next();
+      numLayers = sc.nextInt();
+      numInputs = sc.nextInt();
+      numOutputs = sc.nextInt();
+
+      numActivations = new int[numLayers];
+      numActivations[0] = numInputs;
+      numActivations[numLayers - 1] = numOutputs;
+
+      for (int n = 1; n < numLayers - 1; n++)
+      {
+         numActivations[n] = sc.nextInt();
+      }
+
+      maxActivations = findMaxActivations();
+
+      numInputCases = sc.nextInt();
+
+      activations = new double[numLayers][maxActivations];
+      weights = new double[numLayers - 1][maxActivations][maxActivations];
+
+      learningFactor = sc.nextDouble();
+      maxIterations = sc.nextInt();
+      errorThreshold = sc.nextDouble();
+      minRand = sc.nextDouble();
+      maxRand = sc.nextDouble();
+
+      truthInputs = new double[numInputCases][numInputs];
+      truthOutputs = new double[numInputCases][numOutputs];
+
+      for (int n = 0; n < numInputCases; n++)
+      {
+         for (int o = 0; o < numOutputs; o++)
+         {
+            truthOutputs[n][o] = sc.nextDouble();
+         }
+      }
+
+      for (int n = 0; n < numInputCases; n++)
+      {
+         String inputFile = sc.next();
+         configureInputs(inputFile, n);
+      }
+
+      if (weight.equals("random"))
+      {
+         configureWeights("");
+      }
+      else if (weight.equals("preloaded"))
+      {
+         configureWeights("weightValues");
+      }
+      else if (weight.equals("last"))
+      {
+         configureWeights("finalWeights");
+      }
+
+      if (command.equals("run"))
+      {
+         run();
+      }
+      else if (command.equals("train"))
+      {
+         configureTraining();
+         trainNetwork();
+      }
+   } // public void configureNetwork(String fileName) throws IOException
+
+   /*
+    * Configures inputs of the network
+    */
+   public void configureInputs(String fileName, int numCase) throws IOException
+   {
+      Scanner sc = new Scanner(new FileReader(fileName));
+      for (int i = 0; i < numInputs; i++)
+      {
+         truthInputs[numCase][i] = sc.nextDouble();
+      }
+   }
+
+   /*
+    * Configures theta, psi, and omega arrays exclusively for training purposes.
+    */
+   public void configureTraining()
+   {
+      theta_i_vals = new double[numOutputs];
+      theta_j_vals = new double[numActivations[2]];
+      theta_k_vals = new double[numActivations[1]];
+
+      psi_i_vals = new double[numOutputs];
+      psi_j_vals = new double[numActivations[2]];
+      psi_k_vals = new double[numActivations[1]];
+
+      omega_j_vals = new double[numActivations[2]];
+      omega_k_vals = new double[numActivations[1]];
+   }
+
+   /*
+    * Finds the maximum number of activations in a certain layer of a network to initiate the activations array.
+    *
+    * @return     an integer referring to the max number of activations in a layer
+    */
+   public int findMaxActivations()
+   {
+      int max = -1;
+      for (int i = 0; i < numLayers; i++)
+      {
+         max = Math.max(max, numActivations[i]);
+      }
+      return max;
+   } // public int findMaxActivations()
+
+   /*
+    * Weights of network are configured, depending on whether they are randomized or provided by the user.
+    *
+    * @param fileName      the file name containing weight values
+    * @throws IOException  if the input file is incorrectly formatted
+    */
+   public void configureWeights(String fileName) throws IOException
+   {
+      if (fileName.length() == 0)
+      {
+         for (int n = 0; n < numLayers-1; n++)
+         {
+            for (int k = 0; k < numActivations[n]; k++)
+            {
+               for (int j = 0; j < numActivations[n + 1]; j++)
+               {
+                  weights[n][k][j] = getRandomWeight();
+               }
+            } // for (int k = 0; k < numActivations[n]; k++)
+         } // for (int n = 0; n < numLayers-1; n++)
+      }  // if (fileName.length() == 0)
+      else
+      {
+         Scanner sc = new Scanner(new FileReader(fileName));
+         for (int n = 0; n < numLayers-1; n++)
+         {
+            for (int k = 0; k < numActivations[n]; k++)
+            {
+               for (int j = 0; j < numActivations[n + 1]; j++)
+               {
+                  weights[n][k][j] = sc.nextDouble();
+               }
+            } // for (int k = 0; k < numActivations[n]; k++)
+         } // for (int n = 0; n < numLayers-1; n++)
+      } // else
+   } // public void configureWeights(String fileName) throws IOException
+
+   /*
+    * Generates random weight within the range specified by user.
+    *
+    * @return     double representing a random weight
+    */
+   public double getRandomWeight()
+   {
+      return (Math.random() * (maxRand - minRand)) + minRand;
+   }
+
+   /*
+    * Applies activation function to summation when running the network.
+    *
+    * @param x       the value, or in this case, the summation that is passed into function
+    * @return        output that is produced by inputting x into activation function
+    */
+   public double activationFunction(double x)
+   {
+      return (1.0/(1.0+Math.exp(-x)));
+   }
+
+   /*
+    * Calculates the derivative of the activation function.
+    *
+    * @param x       the value being passed into derivative of activation function
+    * @return        derivative of specified input x when passed into activation function
+    */
+   public double derivative(double x)
+   {
+      double val = activationFunction(x);
+      return val*(1.0-val);
+   }
+
+   /*
+    * Runs network by propagating information through the network and providing an output as a result.
+    * Calculates and stores arrays for theta i, j, k and psi i values.
+    */
+   public void propagate(int testCaseIndex)
+   {
+      for (int i = 0; i < numOutputs; i++)
+      {
+         double theta_i = 0.0;
+         for (int j = 0; j < numActivations[2]; j++)
+         {
+            double theta_j = 0.0;
+            for (int k = 0; k < numActivations[1]; k++)
+            {
+               double theta_k = 0.0;
+               for (int m = 0; m < numInputs; m++)
+               {
+                  theta_k += activations[0][m] * weights[0][m][k];
+               }
+               theta_k_vals[k] = theta_k;
+               activations[1][k] = activationFunction(theta_k);
+               theta_j += activations[1][k] * weights[1][k][j];
+            } // for (int k = 0; k < numActivations[1]; k++)
+            theta_j_vals[j] = theta_j;
+            activations[2][j] = activationFunction(theta_j);
+            theta_i += activations[2][j] * weights[2][j][i];
+         } // for (int j = 0; j < numActivations[2]; j++)
+         theta_i_vals[i] = theta_i;
+         activations[3][i] = activationFunction(theta_i);
+         double omega_i = truthOutputs[testCaseIndex][i] - activations[3][i];
+         double psi_i = omega_i * derivative(theta_i);
+         psi_i_vals[i] = psi_i;
+      } // for (int i = 0; i < numOutputs; i++)
+   } // public void propagate(int testCaseIndex)
+
+   /*
+    * Runs through network, propagating information from input to output layer.
+    */
+   public void run()
+   {
+      for (int n = 0; n < numLayers-1; n++)
+      {
+         for (int j = 0; j < numActivations[n+1]; j++)
+         {
+            double summation = 0.0;
+            for (int k = 0; k < numActivations[n]; k++)
+            {
+               summation += activations[n][k]*weights[n][k][j];
+            }
+            activations[n+1][j] = activationFunction(summation);
+         } // for (int j = 0; n < numActivations[n+1]; n++)
+      } // for (int n = 0; n < numLayers-1; n++)
+   }
+
+   /*
+    * Trains network until requirements for termination of training is achieved. The weights are adjusted by
+    * through the steepest gradient descent method, in which the weights are modified by the product of the learning
+    * factor and the negative derivative of the gradient. Training implements backpropagation to optimize minimization
+    * process. The amount of time, in milliseconds, that elapses during training, is recorded.
+    */
+   public void trainNetwork()
+   {
+      double totalError = 0.0;
+
+      long startTime = System.currentTimeMillis();
+
+      while (!hasTrained)
+      {
+         for (int n = 0; n < numInputCases; n++)
+         {
+            loadInputs(n);
+            expectedOutput = truthOutputs[n];
+            propagate(n);
+
+            for (int j = 0; j < numActivations[2]; j++)                                   // Hidden to output
+            {
+               double omega_j = 0.0;
+               for (int i = 0; i < numOutputs; i++)
+               {
+                  double psi_i = psi_i_vals[i];
+                  omega_j += psi_i * weights[2][j][i];
+
+                  weights[2][j][i] += learningFactor * psi_i * activations[2][j];         // deltaWeight_ji
+               } // for (int i = 0; i < numOutputs; i++)
+               omega_j_vals[j] = omega_j;
+
+               psi_j_vals[j] = omega_j * derivative(theta_j_vals[j]);                     // psi_j
+            } //for (int j = 0; j < numActivations[2]; j++)
+
+            for (int k = 0; k < numActivations[1]; k++)                                   // Hidden to hidden
+            {
+               double omega_k = 0.0;
+               for (int j = 0; j < numActivations[2]; j++)
+               {
+                  double psi_j = psi_j_vals[j];
+                  omega_k += psi_j * weights[1][k][j];
+                  weights[1][k][j] += learningFactor * psi_j * activations[1][k];         // deltaWeight_kj
+               } // for (int j = 0; j < numActivations[2]; j++)
+               omega_k_vals[k] = omega_k;
+               psi_k_vals[k] = omega_k * derivative(theta_k_vals[k]);                     // psi_k
+            } // for (int k = 0; k < numActivations[1]; k++)
+
+            for (int m = 0; m < numInputs; m++)                                           // Input to hidden
+            {
+               for (int k = 0; k < numActivations[1]; k++)
+               {
+                  double psi_k = psi_k_vals[k];
+                  weights[0][m][k] += learningFactor * psi_k * activations[0][m];         // deltaWeight_mk
+               } // for (int k = 0; k < numActivations[1]; k++)
+            } // for (int m = 0; m < numInputs; m++)
+
+            propagate(n);
+
+            for (int i = 0; i < numActivations[3]; i++)                                    // Error calculation
+            {
+               double diff = expectedOutput[i] - activations[3][i];
+               error = 0.5 * (diff * diff);
+               totalError += error;
+            }
+
+
+         } // for (int n = 0; n < numInputCases; n++)
+
+         currIterations++;
+         averageError = (totalError/(numActivations[3]*numInputCases));
+
+         long endTime = System.currentTimeMillis();
+         trainingTime = (int) (endTime - startTime);
+
+         System.out.println(averageError);
+
+         if (averageError < errorThreshold)
+         {
+            hasTrained = true;
+            message = "Training is terminated because error is below threshold." +
+                    "Training lasted " + trainingTime + " milliseconds.";
+         } // if (averageError < errorThreshold)
+         else if (currIterations > maxIterations)
+         {
+            hasTrained = true;
+            message = "Training is terminated since maximum iterations has been surpassed." +
+                    " Training lasted " + trainingTime + " milliseconds.";
+         } // else if (currIterations > maxIterations)
+         totalError = 0.0;
+      } // while (!hasTrained)
+   } // public void trainNetwork()
+
+   /*
+    * Loads activations array with inputs from the test cases.
+    *
+    * @param inputCase     the index of current input test case of the truthInputs array
+    *
+    */
+   public void loadInputs(int inputCase)
+   {
+      for (int i = 0; i < numInputs; i++)
+      {
+         activations[0][i] = truthInputs[inputCase][i];
+      }
+   }
+
+   /*
+    * Prints a summary of the results, including the weights after training, the inputs, expected outputs,
+    * and calculated outputs, the calculated errors, the reason for termination of training, and the total number
+    * of iterations.
+    */
+   public void printSummary() throws IOException
+   {
+      PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter("ErrorSummaries.txt")));
+      for (int i = 0; i < numInputCases; i++)
+      {
+         loadInputs(i);
+         pw.println("Input Case #" + (i+1));
+         System.out.println("Input Case #" +(i+1));
+         System.out.println("Inputs: ");
+         for (int ins = 0; ins < numInputs; ins++)
+         {
+            System.out.print(truthInputs[i][ins] + " ");
+         }
+         System.out.println();
+         System.out.println("Outputs: ");
+
+         run();
+         for (int o = 0; o < numOutputs; o++)
+         {
+            double expected = truthOutputs[i][o];
+            double calc = activations[numLayers-1][o];
+
+            double diff = expected - calc;
+            error = 0.5 * (diff * diff);
+
+            System.out.println("Expected: " + expected + "   Calculated: " + calc + "     Error: " + error);
+            pw.println("Expected: " + expected + "   Calculated: " + calc + "     Error: " + error);
+         } // for (int o = 0; o < numOutputs; o++)
+         pw.println();
+         System.out.println();
+      } // for (int i = 0; i < numInputCases; i++)
+
+      System.out.println(message);
+
+      System.out.println("Network configuration: "  + numInputs + "-" + numActivations[1] + "-" +
+              numActivations[2] + "-" + numOutputs);
+      System.out.println("Learning factor: " + learningFactor);
+      System.out.println("Minimum random weight: " + minRand);
+      System.out.println("Maximum random weight: " + maxRand);
+
+      System.out.println();
+      pw.println("Average error: " + averageError + "\t Threshold error: " + errorThreshold);
+      pw.println("Total Iterations: " + currIterations);
+      System.out.println("Average error: " + averageError + "\t Threshold error: " + errorThreshold);
+      System.out.println("Total Iterations: " + currIterations);
+      System.out.println();
+      pw.close();
+   } // public void printSummary()
+
+   /*
+    * Saves weights in a file so that they can be accessed and reused.
+    *
+    * @param fileName      the file name containing weight values
+    * @throws IOException  if the input file is incorrectly formatted
+    */
+   public void saveWeights(String fileName) throws IOException
+   {
+      PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(fileName)));
+      for (int n = 0; n < numLayers-1; n++)
+      {
+         for (int k = 0; k < numActivations[n]; k++)
+         {
+            for (int j = 0; j < numActivations[n + 1]; j++)
+            {
+               pw.println(weights[n][k][j]);
+            }
+         }
+      } // for (int n = 0; n < numLayers-1; n++)
+
+      pw.println();
+      for (int n = 0; n < numLayers-1; n++)
+      {
+         for (int k = 0; k < numActivations[n]; k++)
+         {
+            for (int j = 0; j < numActivations[n + 1]; j++)
+            {
+               pw.println("w" + n + k + j);
+            }
+         }
+      } // for (int n = 0; n < numLayers-1; n++)
+      pw.println();
+
+      pw.println("Network configuration: "  + numInputs + "-" + numActivations[1] + "-"
+              + numActivations[2] + "-" + numOutputs);
+      pw.println("Learning factor: " + learningFactor);
+      pw.println("Error threshold: " + errorThreshold);
+      pw.println("Minimum random weight: " + minRand);
+      pw.println("Maximum random weight: " + maxRand);
+      pw.println("Maximum number of iterations: " + maxIterations);
+      pw.close();
+   } // public void saveWeights(String fileName) throws IOException
+
+   /*
+    * Constructs an object of the ABCDNetwork class. The configuration information is either specified in a default
+    * file or overridden by the user. Trains or runs network and prints out summary of the results.
+    *
+    * @param args             arguments of the command line
+    *
+    * @throws IOException     if input files are formatted incorrectly
+    */
+   public static void main(String[] args) throws IOException
+   {
+      ABCDBackprop network = new ABCDBackprop();
+
+      if (args.length == 0)
+      {
+         network.configureNetwork("default");
+      }
+      else
+      {
+         network.configureNetwork(args[0]);
+      }
+
+      network.printSummary();
+      network.saveWeights("finalWeights");
+   } // public static void main(String[] args) throws IOException
+} // public class ABCDNetwork
